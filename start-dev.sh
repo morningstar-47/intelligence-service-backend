@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Démarrer l'API Gateway
-cd api-gateway
+cd api_gateway
 uvicorn app.main:app --reload --port 8080 &
 API_GATEWAY_PID=$!
 
 echo "API Gateway démarré avec PID $API_GATEWAY_PID"
 
 # Démarrer l'Auth Service
-cd ../auth-service
+cd ../services/auth_service
 uvicorn app.main:app --reload --port 8000 &
 AUTH_SERVICE_PID=$!
 
