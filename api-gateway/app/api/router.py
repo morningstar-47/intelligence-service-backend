@@ -1,3 +1,4 @@
+# api-gateway/app/api/router.py
 import httpx
 import logging
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
@@ -20,6 +21,13 @@ http_client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
 
 # État des services
 service_health = {}
+
+# Routes internes gérées par l'API Gateway lui-même
+INTERNAL_ROUTES = {
+    "/health": "health_check",
+    "/routes": "list_routes",
+    "/services/health": "service_health_check"
+}
 
 
 async def check_service_health(service_path: str) -> bool:
@@ -63,52 +71,36 @@ async def check_service_health(service_path: str) -> bool:
         return False
 
 
-# async def get_service_url(path: str) -> str:
-#     """
-#     Obtenir l'URL du service approprié pour un chemin donné
-#     """
-#     for route_prefix, service_info in settings.SERVICE_ROUTES.items():
-#         if path.startswith(route_prefix):
-#             service_url = service_info.get("url")
-#             if not service_url:
-#                 raise ServiceUnavailableError(f"Service configuration for {route_prefix} is missing")
-                
-#             # Vérifier l'état du service si la dernière vérification date de plus de 60 secondes
-#             service_status = service_health.get(route_prefix, {})
-#             last_checked = service_status.get("last_checked", 0)
-#             is_healthy = service_status.get("is_healthy", True)  # Présumer que le service est en bonne santé
-            
-#             current_time = time.time()
-#             if current_time - last_checked > 60 or not is_healthy:
-#                 # Vérifier l'état du service de manière asynchrone (ne pas attendre le résultat)
-#                 asyncio.create_task(check_service_health(route_prefix))
-            
-#             return service_url
-    
-#     raise HTTPException(status_code=404, detail=f"No service configured for path: {path}")
-
-
-# api-gateway/app/api/router.py
-
-# Dans la fonction get_service_url
 async def get_service_url(path: str) -> str:
     """
     Obtenir l'URL du service approprié pour un chemin donné
     """
-    # Ajouter un slash au début du chemin s'il n'en a pas
-    if not path.startswith('/'):
-        path = '/' + path
+    # Normaliser le chemin pour la correspondance
+    normalized_path = path
+    if not normalized_path.startswith('/'):
+        normalized_path = '/' + normalized_path
         
+    # Vérifier s'il s'agit d'une route API dirigée vers un service
     for route_prefix, service_info in settings.SERVICE_ROUTES.items():
-        if path.startswith(route_prefix):
+        # Vérifier si le chemin commence par le préfixe de route
+        if normalized_path.startswith(route_prefix):
             service_url = service_info.get("url")
             if not service_url:
                 raise ServiceUnavailableError(f"Service configuration for {route_prefix} is missing")
+                
+            # Vérifier l'état du service si la dernière vérification date de plus de 60 secondes
+            service_status = service_health.get(route_prefix, {})
+            last_checked = service_status.get("last_checked", 0)
+            is_healthy = service_status.get("is_healthy", True)  # Présumer que le service est en bonne santé
             
-            # ... reste de la fonction ...
+            current_time = time.time()
+            if current_time - last_checked > 60 or not is_healthy:
+                # Vérifier l'état du service de manière asynchrone (ne pas attendre le résultat)
+                asyncio.create_task(check_service_health(route_prefix))
             
             return service_url
     
+    # Si aucun service n'est trouvé pour cette route
     raise HTTPException(status_code=404, detail=f"No service configured for path: {path}")
 
 
@@ -137,11 +129,89 @@ async def preserve_headers(request: Request) -> Dict[str, str]:
     return headers
 
 
+@router.get("/health")
+async def health_check():
+    """
+    Point de terminaison de santé
+    """
+    return {
+        "status": "healthy",
+        "service": "api-gateway",
+        "version": "1.0.0"
+    }
+
+
+@router.get("/routes")
+async def list_routes():
+    """
+    Liste les routes disponibles
+    """
+    return {
+        "routes": [
+            {
+                "prefix": prefix,
+                "service_url": info.get("url"),
+                "health_endpoint": info.get("health", "/health")
+            }
+            for prefix, info in settings.SERVICE_ROUTES.items()
+        ],
+        "internal_routes": list(INTERNAL_ROUTES.keys())
+    }
+
+
+@router.get("/services/health")
+async def service_health_check():
+    """
+    Vérifier l'état de santé de tous les services
+    """
+    health_results = {}
+    
+    # Vérifier l'état de santé de chaque service en parallèle
+    tasks = []
+    for service_path in settings.SERVICE_ROUTES:
+        tasks.append(check_service_health(service_path))
+    
+    results = await asyncio.gather(*tasks)
+    
+    # Construire la réponse
+    for i, service_path in enumerate(settings.SERVICE_ROUTES):
+        service_info = settings.SERVICE_ROUTES[service_path]
+        service_status = service_health.get(service_path, {})
+        
+        health_results[service_path] = {
+            "url": service_info.get("url"),
+            "is_healthy": results[i],
+            "last_checked": service_status.get("last_checked", time.time()),
+            "error": service_status.get("error")
+        }
+    
+    return {
+        "gateway_status": "healthy",
+        "services": health_results
+    }
+
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def proxy_request(request: Request, path: str):
     """
-    Proxy toutes les requêtes vers le service approprié
+    Proxy toutes les requêtes vers le service approprié, sauf les routes internes
     """
+    # Créer le chemin complet (en ajoutant un slash au début si nécessaire)
+    full_path = path if path.startswith('/') else '/' + path
+    
+    # Vérifier si c'est une route interne
+    if full_path in INTERNAL_ROUTES:
+        handler_name = INTERNAL_ROUTES[full_path]
+        handler = globals().get(handler_name)
+        if handler and callable(handler):
+            return await handler()
+        else:
+            logger.error(f"Internal route handler '{handler_name}' not found")
+            return Response(
+                content="Internal server error",
+                status_code=500
+            )
+    
     try:
         # Obtenir l'URL du service cible
         service_url = await get_service_url(path)
@@ -210,49 +280,3 @@ async def proxy_request(request: Request, path: str):
             status_code=500,
             headers={"Content-Type": "text/plain"}
         )
-
-
-@router.get("/services/health")
-async def service_health_check():
-    """
-    Vérifier l'état de santé de tous les services
-    """
-    health_results = {}
-    
-    # Vérifier l'état de santé de chaque service en parallèle
-    async with asyncio.TaskGroup() as group:
-        for service_path in settings.SERVICE_ROUTES:
-            group.create_task(check_service_health(service_path))
-    
-    # Construire la réponse
-    for service_path, service_info in settings.SERVICE_ROUTES.items():
-        service_status = service_health.get(service_path, {})
-        
-        health_results[service_path] = {
-            "url": service_info.get("url"),
-            "is_healthy": service_status.get("is_healthy", False),
-            "last_checked": service_status.get("last_checked", 0),
-            "error": service_status.get("error")
-        }
-    
-    return {
-        "gateway_status": "healthy",
-        "services": health_results
-    }
-
-
-@router.get("/routes")
-async def list_routes():
-    """
-    Lister toutes les routes disponibles
-    """
-    return {
-        "routes": [
-            {
-                "prefix": prefix,
-                "service_url": info.get("url"),
-                "health_endpoint": info.get("health", "/health")
-            }
-            for prefix, info in settings.SERVICE_ROUTES.items()
-        ]
-    }
