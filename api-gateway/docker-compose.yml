@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: intelligence-service/api-gateway:latest
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+      - "9090:9090"  # Port pour les métriques Prometheus
+    environment:
+      - ENV=production
+      - API_GATEWAY_PORT=8080
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENABLE_TELEMETRY=${ENABLE_TELEMETRY:-true}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL}
+      - REPORTS_SERVICE_URL=${REPORTS_SERVICE_URL}
+      - ALERTS_SERVICE_URL=${ALERTS_SERVICE_URL}
+      - MAP_SERVICE_URL=${MAP_SERVICE_URL}
+      - AI_SERVICE_URL=${AI_SERVICE_URL}
+      - AUDIT_SERVICE_URL=${AUDIT_SERVICE_URL}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
+      - RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL}
+      - DEFAULT_RATE_LIMIT=${DEFAULT_RATE_LIMIT:-100}
+      - DEFAULT_RATE_LIMIT_PERIOD=${DEFAULT_RATE_LIMIT_PERIOD:-60}
+      - PROXY_SECRET_KEY=${PROXY_SECRET_KEY}
+      - JWT_PUBLIC_KEY_FILE=${JWT_PUBLIC_KEY_FILE}
+      - PROMETHEUS_METRICS_PORT=${PROMETHEUS_METRICS_PORT:-9090}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+    volumes:
+      - ./keys:/app/keys  # Pour les clés JWT
+    depends_on:
+      - redis
+    networks:
+      - intelligence-network
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: api-gateway-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - intelligence-network
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  intelligence-network:
+    external: true
+
+volumes:
+  redis-data:

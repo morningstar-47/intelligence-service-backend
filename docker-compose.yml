@@ -1,0 +1,161 @@
+# docker-compose.yml à la racine du projet
+version: '3.8'
+
+services:
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    networks:
+      - intelligence-network
+    depends_on:
+      - auth-service
+      - reports-service
+      - alerts-service
+      - map-service
+      - ai-service
+    restart: always
+
+  # Service d'authentification
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    networks:
+      - intelligence-network
+    depends_on:
+      - auth-db
+    restart: always
+
+  auth-db:
+    image: postgres:16-alpine
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${AUTH_DB_USER}
+      - POSTGRES_PASSWORD=${AUTH_DB_PASSWORD}
+      - POSTGRES_DB=${AUTH_DB_NAME}
+    networks:
+      - intelligence-network
+    restart: always
+
+  # Service de rapports
+  reports-service:
+    build:
+      context: ./reports-service
+      dockerfile: Dockerfile
+    networks:
+      - intelligence-network
+    depends_on:
+      - reports-db
+      - auth-service
+    restart: always
+
+  reports-db:
+    image: postgres:16-alpine
+    volumes:
+      - reports-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${REPORTS_DB_USER}
+      - POSTGRES_PASSWORD=${REPORTS_DB_PASSWORD}
+      - POSTGRES_DB=${REPORTS_DB_NAME}
+    networks:
+      - intelligence-network
+    restart: always
+
+  # Service d'alertes
+  alerts-service:
+    build:
+      context: ./alerts-service
+      dockerfile: Dockerfile
+    networks:
+      - intelligence-network
+    depends_on:
+      - alerts-db
+      - auth-service
+    restart: always
+
+  alerts-db:
+    image: postgres:16-alpine
+    volumes:
+      - alerts-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${ALERTS_DB_USER}
+      - POSTGRES_PASSWORD=${ALERTS_DB_PASSWORD}
+      - POSTGRES_DB=${ALERTS_DB_NAME}
+    networks:
+      - intelligence-network
+    restart: always
+
+  # Service cartographique
+  map-service:
+    build:
+      context: ./map-service
+      dockerfile: Dockerfile
+    networks:
+      - intelligence-network
+    depends_on:
+      - map-db
+      - auth-service
+    restart: always
+
+  map-db:
+    image: postgres:16-alpine
+    volumes:
+      - map-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${MAP_DB_USER}
+      - POSTGRES_PASSWORD=${MAP_DB_PASSWORD}
+      - POSTGRES_DB=${MAP_DB_NAME}
+    networks:
+      - intelligence-network
+    restart: always
+
+  # Service d'IA
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    networks:
+      - intelligence-network
+    depends_on:
+      - auth-service
+    restart: always
+
+  # Service d'audit
+  audit-service:
+    build:
+      context: ./audit-service
+      dockerfile: Dockerfile
+    networks:
+      - intelligence-network
+    depends_on:
+      - audit-db
+      - auth-service
+    restart: always
+
+  audit-db:
+    image: postgres:16-alpine
+    volumes:
+      - audit-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${AUDIT_DB_USER}
+      - POSTGRES_PASSWORD=${AUDIT_DB_PASSWORD}
+      - POSTGRES_DB=${AUDIT_DB_NAME}
+    networks:
+      - intelligence-network
+    restart: always
+
+networks:
+  intelligence-network:
+    driver: bridge
+
+volumes:
+  auth-db-data:
+  reports-db-data:
+  alerts-db-data:
+  map-db-data:
+  audit-db-data:
